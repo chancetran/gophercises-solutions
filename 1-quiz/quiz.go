@@ -6,6 +6,11 @@ https://pkg.go.dev/encoding/csv
 https://gobyexample.com/structs
 https://gobyexample.com/line-filters
 https://tip.golang.org/doc/comment
+https://go.dev/tour/concurrency/1
+https://go.dev/tour/concurrency/2
+https://go.dev/tour/concurrency/5
+https://gobyexample.com/timeouts
+https://stackoverflow.com/questions/12264789/shuffle-array-in-go
 */
 
 package main
@@ -17,6 +22,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
+
+	"golang.org/x/exp/rand"
 )
 
 type Problem struct {
@@ -42,7 +50,15 @@ func loadData(filepath *string) [][]string {
 }
 
 // Process the data into a Problem array.
-func processData(data [][]string) []Problem {
+// If the user passes the 'shuffle' flag as `true`, then the data is randomly permutated prior to processing.
+func processData(data [][]string, shuffle *bool) []Problem {
+
+	if *shuffle {
+		for i := range data {
+			j := rand.Intn(i + 1)
+			data[i], data[j] = data[j], data[i]
+		}
+	}
 
 	processedData := make([]Problem, len(data))
 	for index, row := range data {
@@ -55,34 +71,60 @@ func processData(data [][]string) []Problem {
 // Quiz a user using problems from a CSV file.
 // Keep track of the number of questions the user gets right and display it at the end.
 // Regardless if the user got a problem right, provide the next problem immediately after.
-func quiz(data []Problem) {
+// The user is asked to confirm when they're ready to begin the quiz, triggering the timer to start.
+// If the quiz is not completed within the time limit, the quiz is terminated even if the user is inputting an answer.
+func quiz(data []Problem, time_limit *int) {
 
-	score := 0
-	for index, problem := range data {
+	// Confirm that the user is ready to take the quiz
+	fmt.Printf("To begin the quiz, please press 'Enter':\n")
 
-		fmt.Printf("Question %d: %s?\n", index+1, problem.Question)
+	r := bufio.NewScanner(os.Stdin)
+	r.Scan()
 
-		r := bufio.NewScanner(os.Stdin)
-		r.Scan()
-		response := r.Text()
-
-		if response == problem.Answer {
-			score++
-		}
-
+	if len(r.Text()) > 0 {
+		log.Fatal("Text detected prior to pressing 'Enter'; aborting....")
 	}
 
-	fmt.Printf("Your score: %d\n", score)
+	score := 0
+	timer := time.NewTimer(time.Duration(*time_limit) * time.Second)
+
+QuizLoop:
+	for index, problem := range data {
+
+		answerCh := make(chan string)
+		go func() {
+			fmt.Printf("Question %d: %s?\n", index+1, problem.Question)
+
+			r.Scan()
+			answerCh <- r.Text()
+		}()
+
+		select {
+		case <-timer.C:
+			fmt.Print("\nTime's up!\n")
+			break QuizLoop
+		case answer := <-answerCh:
+			if answer == problem.Answer {
+				score++
+			}
+		}
+	}
+
+	fmt.Printf("You scored %d out of %d\n", score, len(data))
 }
 
 func main() {
 
 	filepath := flag.String("csv", "problems.csv", "a CSV file in the following format: 'question,answer'")
+	shuffle := flag.Bool("shuffle", false, "shuffle the data...")
+	time_limit := flag.Int("time_limit", 30, "the time limit of the quiz (in seconds)")
+
+	flag.Parse()
 
 	data := loadData(filepath)
-	processedData := processData(data)
+	processedData := processData(data, shuffle)
 
-	quiz(processedData)
+	quiz(processedData, time_limit)
 
 	os.Exit(0)
 }
